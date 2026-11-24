@@ -134,11 +134,26 @@ async function extractImage(markup, pageURL) {
   return '';
 }
 
+// UGG publishes its product photos under stable style-and-colour asset names.
+function uggProductImage(url) {
+  if (url.hostname !== 'www.ugg.com' && url.hostname !== 'ugg.com') return null;
+  const style = url.pathname.match(/\/([a-z0-9]{3,20})\.html$/i)?.[1];
+  if (!style) return null;
+  const color = url.searchParams.get('dwvar_' + style + '_color') || '';
+  if (!/^[a-z0-9]{2,12}$/i.test(color)) return null;
+  return 'https://dms.deckers.com/ugg/image/upload/w_640,q_auto,f_auto/' + style.toUpperCase() + '-' + color.toUpperCase() + '_1.png';
+}
+
 async function discoverImage(start) {
   let pageURL = start;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5500);
   try {
+    const productImage = uggProductImage(start);
+    if (productImage) {
+      const asset = await fetch(productImage, {method:'HEAD', redirect:'manual', signal:controller.signal}).catch(() => null);
+      if (asset?.ok && asset.headers.get('content-type')?.startsWith('image/')) return productImage;
+    }
     for (let redirects = 0; redirects <= 3; redirects++) {
       const response = await fetch(pageURL.href, {redirect:'manual', signal:controller.signal, headers:{'Accept':'text/html,image/avif,image/webp,image/jpeg,image/png,*/*;q=0.5'}});
       if (response.status >= 300 && response.status < 400) {
@@ -168,7 +183,7 @@ async function linkPreview(request, endpoint) {
   // Keep submitted URLs, including their query parameters, out of cache keys and access logs.
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(url.href));
   const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
-  const key = new Request(endpoint.origin + endpoint.pathname + '/' + hex);
+  const key = new Request(endpoint.origin + endpoint.pathname + '/v2/' + hex);
   const cache = globalThis.caches?.default;
   const cached = await cache?.match(key).catch(() => null);
   if (cached) return json(await cached.json());
