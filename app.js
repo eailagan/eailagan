@@ -288,7 +288,6 @@ byId('copy-link').addEventListener('click', async () => {
 byId('retry').addEventListener('click', refresh);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) refresh(); }, 60000);
-byId('season').textContent = String(new Date().getFullYear());
 async function updateStorageNote() {
   const note = byId('storage-note');
   const sync = byId('sync-device');

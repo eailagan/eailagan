@@ -6,13 +6,13 @@
   <meta name="theme-color" content="#ffffff">
   <meta name="robots" content="noindex,nofollow">
   <meta name="referrer" content="no-referrer">
-  <meta name="description" content="A shared Christmas gift catalog for the family.">
-  <title>Giftbook — Christmas catalog</title>
+  <meta name="description" content="A shared Christmas wish list for the family.">
+  <title>Christmas Wish List</title>
   <link rel="icon" href="./giftbook.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./app.css">
+  <link rel="stylesheet" href="./app.css?v=2">
   <script defer src="./config.js?v=2"></script>
   <script defer src="./device-store.js"></script>
-  <script defer src="./app.js"></script>
+  <script defer src="./app.js?v=2"></script>
 </head>
 <body>
   <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -28,23 +28,16 @@
     <symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
     <symbol id="link" viewBox="0 0 24 24"><path d="m10 14 4-4m-3-2 2-2a4.25 4.25 0 0 1 6 6l-2 2m-4 2-2 2a4.25 4.25 0 0 1-6-6l2-2"/></symbol>
   </svg>
-  <header class="mast"><div class="wrap mast-inner">
-    <div class="wordmark"><span class="brand-icon"><svg aria-hidden="true"><use href="#gift"/></svg></span>Giftbook</div>
-    <button id="share-btn" class="secondary"><svg class="icon" aria-hidden="true"><use href="#share"/></svg>Share catalog</button>
-  </div></header>
   <main class="wrap">
     <section class="hero" aria-labelledby="page-title">
-      <div class="hero-copy">
-        <p class="occasion"><span></span>December 25, <span id="season">2026</span></p>
-        <h1 id="page-title">Christmas<br>catalog<span>.</span></h1>
-        <button id="add" class="primary"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>Add gift idea</button>
-      </div>
-      <div class="hero-art"><img src="./gift.webp" fetchpriority="high" alt="" width="1200" height="800"></div>
+      <h1 id="page-title">Christmas Wish List</h1>
+      <button id="add" class="primary"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>Add gift idea</button>
     </section>
     <section class="collection" aria-labelledby="collection-title">
       <div class="collection-head">
         <div class="count-title"><h2 id="collection-title">Gift ideas</h2><span id="count" class="count" aria-label="Number of ideas">…</span></div>
         <div class="tools">
+          <button id="share-btn" class="secondary"><svg class="icon" aria-hidden="true"><use href="#share"/></svg>Share list</button>
           <label class="filter"><svg class="icon" aria-hidden="true"><use href="#people"/></svg><select aria-label="Filter by person" id="person-filter"><option value="">Everyone</option></select><svg class="icon chevron" aria-hidden="true"><use href="#chevron"/></svg></label>
           <div class="views" role="group" aria-label="Catalog view">
             <button aria-label="Card view" aria-pressed="true" id="view-grid" title="Card view"><svg class="icon" aria-hidden="true"><use href="#grid"/></svg></button>
@@ -81,7 +74,7 @@
     <div class="detail-actions"><a id="detail-link" class="primary" target="_blank" rel="noopener noreferrer" hidden>View product</a><button class="secondary" id="edit" hidden>Edit idea</button></div>
   </dialog>
   <dialog id="share-dialog" aria-labelledby="share-title">
-    <div class="dialog-head"><h2 id="share-title">Share catalog</h2><button class="icon-btn" data-close aria-label="Close"><svg class="icon"><use href="#close"/></svg></button></div>
+    <div class="dialog-head"><h2 id="share-title">Share list</h2><button class="icon-btn" data-close aria-label="Close"><svg class="icon"><use href="#close"/></svg></button></div>
     <p>Anyone with this link can view and add gift ideas.</p><label>Family link<input id="share-url" readonly></label><div class="form-actions"><button id="copy-link" class="primary">Copy link</button></div>
   </dialog>
   <dialog id="delete-dialog" aria-labelledby="delete-title">
