@@ -1,2 +1,2 @@
-// Set this to the HTTPS origin of the family's deployed catalog API to enable shared storage.
-window.GIFTBOOK_API_ORIGIN = '';
+// Shared storage for the family catalog hosted on GitHub Pages.
+window.GIFTBOOK_API_ORIGIN = 'https://family-giftbook-eman.racingpangolin3.chatgpt.site';
