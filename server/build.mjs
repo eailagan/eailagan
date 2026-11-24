@@ -8,7 +8,16 @@ const api = await readFile(path.join(root, 'server/catalog.mjs'), 'utf8');
 const entry = `
 export default {
   fetch(request, env) {
-    if (new URL(request.url).pathname.startsWith('/api/')) return serveCatalog(request, env);
+    const {pathname} = new URL(request.url);
+    if (pathname.startsWith('/api/')) return serveCatalog(request, env);
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      if (pathname === '/' || pathname === '/index.html') {
+        return Response.redirect('https://eailagan.github.io/eailagan/', 302);
+      }
+      if (pathname === '/favicon.ico') {
+        return Response.redirect('https://eailagan.github.io/eailagan/giftbook.svg', 302);
+      }
+    }
     return new Response('Not found', {status:404});
   }
 };
