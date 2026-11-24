@@ -28,7 +28,13 @@ const deviceCatalog = (() => {
   const list = room => run('readonly', store => store.index('by-room').getAll(room));
   const remove = (room, id) => run('readwrite', store => store.delete([room,id]));
   async function request(room, url, options = {}) {
-    if (!options.method) return {ideas: await list(room), cursor: null};
+    if (!options.method) {
+      const query = new URL(url).searchParams;
+      const ideas = await list(room);
+      if (query.get('view') === 'people') return {people:ideas.map(idea => idea.person), cursor:null};
+      const person = query.get('person');
+      return {ideas:person ? ideas.filter(idea => idea.person.normalize('NFC').trim().toLowerCase() === person) : ideas, cursor:null};
+    }
     const id = String(url).split('/').at(-1);
     if (options.method === 'DELETE') { await remove(room,id); return null; }
     const existing = await run('readonly', store => store.get([room,id]));

@@ -3,7 +3,6 @@
 const byId = id => document.getElementById(id);
 const form = byId('idea-form');
 const editor = byId('editor');
-const filter = byId('person-filter');
 const sessionFallback = new Map();
 const preference = {
   get(key) { try { return localStorage.getItem('giftbook.' + key) ?? sessionFallback.get(key); } catch { return sessionFallback.get(key); } },
@@ -20,7 +19,7 @@ window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== roo
 
 const shared = Boolean(window.GIFTBOOK_API_ORIGIN);
 const api = (window.GIFTBOOK_API_ORIGIN || location.origin) + '/api/' + room + '/ideas';
-const state = {ideas: [], view: preference.get('view') === 'list' ? 'list' : 'grid', loading: true, error: false};
+const state = {people: [], person: '', ideas: [], view: preference.get('view') === 'list' ? 'list' : 'grid', loading: true, error: false};
 let requestNumber = 0;
 let draft, selected, photoWork = 0, photoPending = false, saving = false, toastTimer;
 const editStorage = id => 'edit.' + room + '.' + id;
@@ -51,41 +50,105 @@ function make(tag, cls, text) {
   return element;
 }
 
+// Reuse the same lookup when a link appears in a form, a card, or its detail view.
+const linkImages = new Map();
+function linkImage(value) {
+  if (!value || !shared) return Promise.resolve('');
+  if (!linkImages.has(value)) {
+    const pending = fetch(api.replace(/\/ideas$/, '/preview'), {
+      method:'POST', credentials:'omit', referrerPolicy:'no-referrer',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:value})
+    }).then(async response => {
+      if (!response.ok) throw new Error('Preview unavailable');
+      return (await response.json()).image || '';
+    }).catch(() => '');
+    linkImages.set(value, pending);
+    pending.then(image => { if (!image) setTimeout(() => linkImages.delete(value), 60000); });
+  }
+  return linkImages.get(value);
+}
+
+function displayImage(img, photo, link) {
+  const revision = String(Number(img.dataset.revision || 0) + 1);
+  img.dataset.revision = revision;
+  img.hidden = true;
+  img.removeAttribute('src');
+  const show = src => {
+    if (!src || img.dataset.revision !== revision) return;
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => { if (img.dataset.revision === revision) img.hidden = false; };
+    img.onerror = () => { if (img.dataset.revision === revision) img.hidden = true; };
+    img.src = src;
+  };
+  if (photo) show(photo);
+  else if (link) linkImage(link).then(show);
+}
+
 function makeCard(idea) {
   const button = make('button', 'idea');
+  button.dataset.id = idea.id;
   const visual = make('span', 'idea-visual');
-  if (idea.photo) {
+  visual.append(icon('gift'));
+  if (idea.photo || idea.url) {
     const photo = make('img');
     photo.alt = '';
-    photo.loading = 'lazy';
-    photo.src = idea.photo;
     visual.append(photo);
-  } else { visual.append(icon('gift')); }
+    displayImage(photo, idea.photo, idea.url);
+  }
   const info = make('span', 'idea-info');
-  info.append(make('span', 'person-name', idea.person), make('span', 'idea-title', idea.title));
+  info.append(make('span', 'idea-title', idea.title));
   if (idea.price !== null) info.append(make('span', 'idea-price', money(idea.price)));
   button.append(visual, info);
   button.addEventListener('click', () => showDetail(idea));
   return button;
 }
 
+function openPerson(name, moveFocus = true) {
+  state.person = name;
+  state.ideas = [];
+  state.loading = true;
+  state.error = false;
+  render();
+  if (moveFocus) byId('collection-title').focus();
+  refresh();
+}
+
+function makePerson(name) {
+  const item = make('li');
+  const button = make('button', 'person-row');
+  button.dataset.person = personKey(name);
+  button.append(make('span', '', name), icon('chevron'));
+  button.addEventListener('click', () => {
+    history.pushState({wishPerson:name}, '', location.href);
+    openPerson(name);
+  });
+  item.append(button);
+  return item;
+}
+
 function render() {
-  const names = new Map();
-  for (const idea of state.ideas) names.set(personKey(idea.person), idea.person);
-  const chosen = filter.value;
-  const options = [...names.entries()].sort((a,b) => a[1].localeCompare(b[1]));
-  filter.replaceChildren(new Option('Everyone', ''), ...options.map(([k,v]) => new Option(v,k)));
-  filter.value = names.has(chosen) ? chosen : '';
-  byId('known-people').replaceChildren(...options.map(([,name]) => new Option(name)));
-  const ideas = filter.value ? state.ideas.filter(x => personKey(x.person) === filter.value) : state.ideas;
+  const inside = Boolean(state.person);
+  const people = byId('people');
   const list = byId('ideas');
+  const focusedPerson = document.activeElement?.dataset.person;
+  const focusedId = document.activeElement?.dataset.id;
+  byId('collection-title').textContent = inside ? state.person : 'Family lists';
+  byId('all-people').hidden = !inside;
+  byId('view-options').hidden = !inside;
+  byId('known-people').replaceChildren(...state.people.map(name => new Option(name)));
+  people.hidden = inside;
+  people.replaceChildren(...(inside ? [] : state.people.map(makePerson)));
+  list.hidden = !inside;
   list.classList.toggle('list', state.view === 'list');
-  list.replaceChildren(...ideas.map(makeCard));
+  list.replaceChildren(...(inside ? state.ideas.map(makeCard) : []));
+  if (focusedPerson) [...people.querySelectorAll('button')].find(el => el.dataset.person === focusedPerson)?.focus({preventScroll:true});
+  if (focusedId) [...list.children].find(el => el.dataset.id === focusedId)?.focus({preventScroll:true});
   byId('view-grid').setAttribute('aria-pressed', state.view === 'grid');
   byId('view-list').setAttribute('aria-pressed', state.view === 'list');
-  byId('count').textContent = state.loading && !state.ideas.length ? '…' : state.error && !state.ideas.length ? '—' : String(ideas.length);
-  byId('empty').hidden = ideas.length > 0 || state.error;
-  byId('empty-title').textContent = state.loading ? 'Loading gift ideas…' : 'No gift ideas yet';
+  const count = inside ? state.ideas.length : state.people.length;
+  byId('error').hidden = !state.error;
+  byId('empty').hidden = count > 0 || state.error;
+  byId('empty-title').textContent = state.loading ? (inside ? 'Loading gift ideas…' : 'Loading lists…') : (inside ? 'No gift ideas yet' : 'No lists yet');
   byId('empty-action').hidden = state.loading || state.error;
 }
 
@@ -103,17 +166,27 @@ async function refresh() {
   const number = ++requestNumber;
   try {
     let cursor = null;
-    const ideas = [];
+    const person = state.person;
+    const results = [];
     do {
       const url = new URL(api);
+      if (person) url.searchParams.set('person', personKey(person));
+      else url.searchParams.set('view', 'people');
       if (cursor) url.searchParams.set('cursor', cursor);
       const page = await request(url);
       if (number !== requestNumber) return;
-      if (!Array.isArray(page.ideas)) throw new Error('The shared catalog is unavailable.');
-      ideas.push(...page.ideas);
+      const entries = person ? page.ideas : page.people;
+      if (!Array.isArray(entries)) throw new Error('The shared list is unavailable.');
+      results.push(...entries);
       cursor = page.cursor;
     } while (cursor);
-    state.ideas = ideas.sort((a,b) => b.created.localeCompare(a.created) || a.id.localeCompare(b.id));
+    if (person) {
+      state.ideas = results.sort((a,b) => b.created.localeCompare(a.created) || a.id.localeCompare(b.id));
+    } else {
+      const names = new Map();
+      for (const name of results.sort((a,b) => a.localeCompare(b))) names.set(personKey(name), name);
+      state.people = [...names.values()];
+    }
     state.error = false;
     byId('error').hidden = true;
   } catch {
@@ -132,9 +205,7 @@ function showDetail(idea) {
   byId('detail-title').textContent = idea.title;
   byId('detail-price').textContent = idea.price === null ? '' : money(idea.price);
   byId('detail-notes').textContent = idea.notes;
-  const photo = byId('detail-image');
-  photo.hidden = !idea.photo;
-  if (idea.photo) photo.src = idea.photo; else photo.removeAttribute('src');
+  displayImage(byId('detail-image'), idea.photo, idea.url);
   const product = byId('detail-link');
   product.hidden = !idea.url;
   if (idea.url) product.href = idea.url; else product.removeAttribute('href');
@@ -144,9 +215,7 @@ function showDetail(idea) {
 
 function setPhoto(value) {
   draft.photo = value;
-  const preview = byId('photo-preview');
-  preview.hidden = !value;
-  if (value) preview.src = value; else preview.removeAttribute('src');
+  displayImage(byId('photo-preview'), value, form.elements.url.value.trim());
   byId('photo-label').textContent = value ? 'Change photo' : 'Add photo';
   byId('remove-photo').hidden = !value;
 }
@@ -245,7 +314,6 @@ form.addEventListener('submit', async event => {
     await request(api + '/' + draft.id, {method:'PUT',headers:{'Content-Type':'application/json','X-Edit-Key':draft.key},body:JSON.stringify(data)});
     preference.set(editStorage(draft.id), draft.key);
     preference.set('name.' + room, data.person);
-    filter.value = '';
     editor.close();
     toast(draft.editing ? 'Gift idea updated' : 'Gift idea added');
     await refresh();
@@ -268,7 +336,22 @@ byId('delete-confirm').addEventListener('click', async () => {
 });
 for (const el of document.querySelectorAll('[data-close]')) el.addEventListener('click', () => el.closest('dialog').close());
 for (const id of ['add','empty-action']) byId(id).addEventListener('click', () => openEditor());
-filter.addEventListener('change', render);
+byId('all-people').addEventListener('click', () => history.back());
+window.addEventListener('popstate', event => {
+  if (location.hash.slice(1) === room) openPerson(event.state?.wishPerson || '');
+});
+let previewTimer;
+form.elements.url.addEventListener('input', () => {
+  clearTimeout(previewTimer);
+  if (draft.photo) return;
+  displayImage(byId('photo-preview'), '', '');
+  previewTimer = setTimeout(() => {
+    if (editor.open && !draft.photo && form.elements.url.validity.valid) {
+      displayImage(byId('photo-preview'), '', form.elements.url.value.trim());
+    }
+  }, 450);
+});
+editor.addEventListener('close', () => clearTimeout(previewTimer));
 for (const view of ['grid','list']) byId('view-' + view).addEventListener('click', () => { state.view = view; preference.set('view',view); render(); });
 byId('share-btn').addEventListener('click', () => {
   byId('share-url').value = shareLink();

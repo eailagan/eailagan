@@ -46,7 +46,7 @@ function validate(data) {
   return {person, title, notes, url, price, photo};
 }
 
-async function readBody(request) {
+async function readBody(request, limit = maxPhotoChars + 11000) {
   if (!request.headers.get('content-type')?.startsWith('application/json')) {
     throw new InputError('Send a JSON gift idea.', 415);
   }
@@ -58,7 +58,7 @@ async function readBody(request) {
     const {value, done} = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > maxPhotoChars + 11000) {
+    if (size > limit) {
       await reader.cancel();
       throw new InputError('This photo is too large.', 413);
     }
@@ -75,20 +75,147 @@ async function editHash(request) {
   return Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
 }
 
+// All outbound requests use the Worker's public-internet fetch, without caller headers or credentials.
+function storefrontURL(value, base) {
+  try {
+    const url = new URL(value, base);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null;
+    const host = url.hostname.toLowerCase().replace(/\.$/, '');
+    if (!/^(?:[a-z0-9-]+\.)+[a-z]{2,63}$/.test(host)) return null;
+    if (/(^|\.)(localhost|local|internal|test|invalid|example|lan|home|arpa|onion|chatgpt\.site)$/.test(host)) return null;
+    url.hostname = host;
+    url.protocol = 'https:';
+    url.hash = '';
+    return url;
+  } catch { return null; }
+}
+
+async function headMarkup(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let markup = '';
+  let remaining = 512 * 1024;
+  try {
+    while (remaining > 0) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const slice = value.subarray(0, remaining);
+      remaining -= slice.length;
+      markup += decoder.decode(slice, {stream:true});
+    }
+    return markup + decoder.decode();
+  } finally { reader.cancel().catch(() => {}); }
+}
+
+async function extractImage(markup, pageURL) {
+  const candidates = new Map();
+  let base = pageURL;
+  const remember = (rank, value) => {
+    if (value && !candidates.has(rank)) candidates.set(rank, value);
+  };
+  const rewriter = new HTMLRewriter()
+    .on('base[href]', {element(el) { base = storefrontURL(el.getAttribute('href'), pageURL) || pageURL; }})
+    .on('meta', {element(el) {
+      const name = (el.getAttribute('property') || el.getAttribute('name') || el.getAttribute('itemprop') || '').trim().toLowerCase();
+      const index = ['og:image:secure_url','og:image','og:image:url','twitter:image','twitter:image:src','image'].indexOf(name);
+      if (index >= 0) remember(index, el.getAttribute('content'));
+    }})
+    .on('link[rel~="image_src"]', {element(el) { remember(6, el.getAttribute('href')); }});
+  for (const [rank, selector] of ['img[itemprop~="image"]','#landingImage','main img','article img'].entries()) {
+    rewriter.on(selector, {element(el) {
+      remember(7 + rank, el.getAttribute('data-old-hires') || el.getAttribute('data-src') || el.getAttribute('src'));
+    }});
+  }
+  await rewriter.transform(new Response(markup, {headers:{'Content-Type':'text/html;charset=utf-8'}})).text();
+  for (const [,value] of [...candidates].sort(([a],[b]) => a-b)) {
+    const url = storefrontURL(value.trim().replace(/&amp;/gi,'&'), base);
+    if (url) return url.href;
+  }
+  return '';
+}
+
+async function discoverImage(start) {
+  let pageURL = start;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5500);
+  try {
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      const response = await fetch(pageURL.href, {redirect:'manual', signal:controller.signal, headers:{'Accept':'text/html,image/avif,image/webp,image/jpeg,image/png,*/*;q=0.5'}});
+      if (response.status >= 300 && response.status < 400) {
+        response.body?.cancel().catch(() => {});
+        const location = response.headers.get('location');
+        if (!location) return '';
+        pageURL = storefrontURL(location, pageURL);
+        if (!pageURL) return '';
+        continue;
+      }
+      const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!response.ok || !response.body || !['text/html','application/xhtml+xml'].includes(type)) {
+        response.body?.cancel().catch(() => {});
+        return response.ok && /^image\/(?:jpeg|png|webp|avif|gif)$/.test(type) ? pageURL.href : '';
+      }
+      return await extractImage(await headMarkup(response), pageURL);
+    }
+  } catch { return ''; }
+  finally { clearTimeout(timer); }
+  return '';
+}
+
+async function linkPreview(request, endpoint) {
+  const data = await readBody(request, 12000);
+  const url = storefrontURL(field(data || {}, 'url', 2048, true));
+  if (!url) return json({image:''});
+  // Keep submitted URLs, including their query parameters, out of cache keys and access logs.
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(url.href));
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+  const key = new Request(endpoint.origin + endpoint.pathname + '/' + hex);
+  const cache = globalThis.caches?.default;
+  const cached = await cache?.match(key).catch(() => null);
+  if (cached) return json(await cached.json());
+  const image = await discoverImage(url);
+  if (cache) {
+    const ttl = image ? 86400 : 300;
+    const result = new Response(JSON.stringify({image}), {headers:{'Cache-Control':'public, max-age=' + ttl,'Content-Type':'application/json'}});
+    await cache.put(key,result).catch(() => {});
+  }
+  return json({image});
+}
+
+const normalizePerson = name => name.normalize('NFC').trim().toLowerCase();
+
+async function catalogPage(bucket, prefix, url) {
+  const namesOnly = url.searchParams.get('view') === 'people';
+  const person = normalizePerson(url.searchParams.get('person') || '');
+  const page = await bucket.list({prefix, limit:20, include:['customMetadata'], cursor:url.searchParams.get('cursor') || undefined});
+  const entries = await Promise.all(page.objects.map(async object => {
+    const storedName = object.customMetadata?.person;
+    if (storedName) {
+      const name = decodeURIComponent(storedName);
+      if (namesOnly) return name;
+      if (person && normalizePerson(name) !== person) return null;
+    }
+    const stored = await bucket.get(object.key);
+    if (!stored) return null;
+    const idea = await stored.json();
+    if (namesOnly) return idea.person;
+    return !person || normalizePerson(idea.person) === person ? idea : null;
+  }));
+  const items = entries.filter(Boolean);
+  const payload = namesOnly ? {people:[...new Set(items)]} : {ideas:items};
+  return json({...payload, cursor:page.truncated ? page.cursor : null});
+}
+
 async function handle(request, env, url) {
   const [, , room, resource, id, extra] = url.pathname.split('/');
-  if (extra !== undefined || !roomPattern.test(room) || resource !== 'ideas' || (id !== undefined && !idPattern.test(id))) {
+  if (!roomPattern.test(room) || extra !== undefined) throw new InputError('Catalog not found.', 404);
+  if (resource === 'preview' && !id && request.method === 'POST') return linkPreview(request, url);
+  if (resource !== 'ideas' || (id !== undefined && !idPattern.test(id))) {
     throw new InputError('Catalog not found.', 404);
   }
   const prefix = 'catalog/' + room + '/';
   const bucket = env.BUCKET;
   if (!id && request.method === 'GET') {
-    const result = await bucket.list({prefix, limit: 20, cursor: url.searchParams.get('cursor') || undefined});
-    const entries = await Promise.all(result.objects.map(async object => {
-      const item = await bucket.get(object.key);
-      return item ? item.json() : null;
-    }));
-    return json({ideas: entries.filter(Boolean), cursor: result.truncated ? result.cursor : null});
+    return catalogPage(bucket, prefix, url);
   }
   if (!id || !['PUT', 'DELETE'].includes(request.method)) throw new InputError('Unsupported operation.', 405);
   const hash = await editHash(request);
@@ -104,7 +231,7 @@ async function handle(request, env, url) {
   const idea = {id, created, ...data};
   const written = await bucket.put(key, JSON.stringify(idea), {
     onlyIf: current ? {etagMatches: current.etag} : {etagDoesNotMatch: '*'},
-    customMetadata: {editHash: hash, created},
+    customMetadata: {editHash: hash, created, person: encodeURIComponent(data.person)},
     httpMetadata: {contentType: 'application/json'}
   });
   if (!written) throw new InputError('The idea changed. Refresh and try again.', 409);
@@ -118,7 +245,7 @@ export async function serveCatalog(request, env) {
   const headers = new Headers({'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff'});
   if (!allowed) return new Response('Origin unavailable', {status: 403, headers});
   if (origin) headers.set('Access-Control-Allow-Origin', origin);
-  headers.set('Access-Control-Allow-Methods', 'GET, PUT, DELETE, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Edit-Key');
   let result;
   try {
